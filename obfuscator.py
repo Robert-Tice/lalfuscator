@@ -100,7 +100,11 @@ class Obfuscator:
             if key in self.__file_map.keys():
                 dest = os.path.join(os.path.dirname(os.path.abspath(key)), self.__file_map[key] + os.path.splitext(key)[1])
                 #self.__provider.log("Move %s to %s" % (key, dest))
-                shutil.move(key, dest)
+                if key != dest:
+                    if os.path.isfile(dest):
+                        self.__provider.log("Error: file %s already exists..." % dest, mode="error")
+                    else:
+                        shutil.move(key, dest)
             else:
                 self.__provider.log("%s has no rename target. Maybe main?" % key)
 
@@ -166,7 +170,7 @@ class Obfuscator:
             if u.root is None:
                 self.__console_msg("Could not parse %s\n" % f, mode="error")
                 for diag in u.diagnostics:
-                    print '  {}'.format(diag)
+                    self.__provider.log('  {}'.format(diag), mode="error")
                     return
 
             dump_nodes(u.root, "%s.dump" % u.root.unit.filename)
@@ -180,7 +184,7 @@ class Obfuscator:
                 if node.p_is_defining:
                     try:
                         ref = node.p_enclosing_defining_name.p_basic_decl.p_canonical_part
-                        print "Defining ref canonical: %s for %s" % (ref, node)
+                        #print "Defining ref canonical: %s for %s" % (ref, node)
                         loc_node = node
                     except Exception as ex:
                         self.__provider.log(node)
@@ -190,7 +194,7 @@ class Obfuscator:
                     try:
                         ref = node.p_referenced_decl()
                         if ref is None:
-                            print "%s has no referenced_decl..." % node
+                            self.__provider.log("%s has no referenced_decl..." % node, mode="error")
                             continue
 
                         ref = ref.p_canonical_part
@@ -229,7 +233,16 @@ class Obfuscator:
                     self.__provider.log("%s ref is None - Defining: %s..." % (node, node.p_is_defining), mode="error")
 
             for node in u.root.findall(lal.LibraryItem):
-                #TODO: figure out how to map file names to package tokens
-                pass
+                if node.f_item.is_a(lal.SubpBody):
+                    self.__file_map[node.unit.filename] = "main"
+                elif node.f_item.is_a(lal.BasePackageDecl, lal.GenericPackageDecl, lal.GenericPackageInstantiation, lal.PackageBody):
+                    loc = file_location(node.f_item.p_canonical_part)
+                    if loc not in catalog.keys():
+                        self.__provider.log("Package defintion not found in catalog - %s:%s" % (loc, catalog.keys()))
+                        continue
+                    token = catalog[loc]["token"]
+                    self.__file_map[node.unit.filename] = token
+                else:
+                    self.__provider.log("This LibraryItem is not recognized - %s:%s" % (node.unit.filename, node.f_item))
 
         return catalog
