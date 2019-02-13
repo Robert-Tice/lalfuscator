@@ -13,6 +13,10 @@ parser.add_argument('src_folder', help='The top level folder where all the sourc
 parser.add_argument("--scenario", type=json.loads, help="Scenario variables for the project in json form")
 parser.add_argument("--target", help="Build target")
 parser.add_argument("--runtime", help="Build runtime")
+parser.add_argument("--dump", help="Dump lal tree of source files")
+parser.add_argument("--dest", help="Destination folder for obfuscated project")
+parser.add_argument("--name", help="The name of the obfuscated project and project directory")
+
 
 class CLIProvider(obfuscator.BaseProvider):
 
@@ -49,8 +53,7 @@ class CLIProvider(obfuscator.BaseProvider):
 def main(args):
     provider =  CLIProvider(args.project_file, args.src_folder)
     obf = obfuscator.Obfuscator(provider)
-    obf.do_obfuscate()
-
+    obf.do_obfuscate(args.dest, args.name, args.dump)
 
 if __name__== "__main__":
     main(parser.parse_args())

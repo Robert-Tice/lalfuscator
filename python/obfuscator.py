@@ -1,4 +1,5 @@
 from abc import abstractmethod
+import inspect
 import libadalang as lal
 import os
 import shutil
@@ -42,12 +43,19 @@ class Obfuscator:
     def __init__(self, provider):
         self.__provider = provider
 
-    def __create_obfuscated_project(self):
+    def __create_obfuscated_project(self, dest, name):
         counter = 0
+
+        if not os.path.isdir(dest):
+            self.__provider.log("Destination path %s is invalid. Defaulting to current directory %s..." % (dest, os.getcwd()), mode="error")
+            dest = os.getcwd()
+
+        if name is None:
+            name = "obdir_"
 
         # create obfuscated project from loaded project
         while True:
-            wr_dirname = "obdir_%s" % counter
+            wr_dirname = os.path.join(dest, "obdir_%s" % counter)
             if not os.path.isdir(wr_dirname):
                 os.mkdir(wr_dirname)
                 os.mkdir(os.path.join(wr_dirname, "src"))
@@ -61,13 +69,17 @@ class Obfuscator:
 
         shutil.copyfile(self.__provider.get_proj_location(), self.__wr_proj)
 
-        self.__unit_provider = lal.UnitProvider.for_project(self.__wr_proj, scenario_vars=self.__provider.get_scenario_vars(), target=self.__provider.get_target(), runtime=self.__provider.get_runtime())
-        self.__ctx = lal.AnalysisContext(unit_provider=self.__unit_provider)
-
+        dests = []
         for src in ro_sources:
             dest = os.path.join(wr_dirname, "src", os.path.basename(src))
             shutil.copyfile(src, dest)
-            self.__units.append(self.__ctx.get_from_file(dest))
+            dests.append(dest)
+
+        self.__unit_provider = lal.UnitProvider.for_project(self.__wr_proj, scenario_vars=self.__provider.get_scenario_vars(), target=self.__provider.get_target(), runtime=self.__provider.get_runtime())
+        self.__ctx = lal.AnalysisContext(unit_provider=self.__unit_provider)
+
+        for src in dests:
+            self.__units.append(self.__ctx.get_from_file(src))
 
     def __edit_files(self, catalog):
         by_filename = {}
@@ -113,17 +125,19 @@ class Obfuscator:
         for key, value in catalog.iteritems():
             lines.append("%s, %s\n" % (list(value["nodes"])[0].text, value["token"]))
 
-        with open("token_map.txt", "w") as f:
+        with open(os.path.join(os.path.dirname(self.__wr_proj), "token_map.txt"), "w") as f:
             f.writelines(lines)
 
-    def do_obfuscate(self):
-        self.__create_obfuscated_project()
-        node_catalog = self.__populate_catalog()
+    def do_obfuscate(self, dest, name, dump):
+        if dest is None:
+            dest = os.getcwd()
+        self.__create_obfuscated_project(dest, name)
+        node_catalog = self.__populate_catalog(dump)
         self.__generate_token_map(node_catalog)
         self.__edit_files(node_catalog)
         self.__provider.log("Obfuscated project located: %s" % self.__wr_proj)
 
-    def __populate_catalog(self):
+    def __populate_catalog(self, dump):
         catalog = {}
 
         token_catalog = {"package": Token("pk"),
@@ -166,6 +180,15 @@ class Obfuscator:
             with open(filename, "w") as f:
                 root.dump(file=f)
 
+        def print_frame():
+            callerframerecord = inspect.stack()[1]
+
+            frame = callerframerecord[0]
+            info = inspect.getframeinfo(frame)
+
+            return "%s:%s:%s" % (info.filename, info.function, info.lineno)
+
+
         for u in self.__units:
             if u.root is None:
                 self.__console_msg("Could not parse %s\n" % f, mode="error")
@@ -173,7 +196,8 @@ class Obfuscator:
                     self.__provider.log('  {}'.format(diag), mode="error")
                     return
 
-            dump_nodes(u.root, "%s.dump" % u.root.unit.filename)
+            if dump:
+                dump_nodes(u.root, "%s.dump" % u.root.unit.filename)
 
             self.__provider.log("Parsing file %s..." % u.root.unit.filename)
             for node in u.root.findall(lal.Identifier):
@@ -183,25 +207,27 @@ class Obfuscator:
 
                 if node.p_is_defining:
                     try:
-                        ref = node.p_enclosing_defining_name.p_basic_decl.p_canonical_part
+                        ref = node.p_enclosing_defining_name.p_basic_decl#.p_canonical_part
                         #print "Defining ref canonical: %s for %s" % (ref, node)
                         loc_node = node
                     except Exception as ex:
-                        self.__provider.log(node)
-                        self.__provider.log(ex.args[0], mode="error")
+                        self.__provider.log("%s: %s" % (print_frame(), node))
+                        self.__provider.log("%s: %s" % (print_frame(), ex.args[0]), mode="error")
                         continue
                 else:
                     try:
-                        ref = node.p_referenced_decl()
+                    #    ref = node.p_referenced_decl()
+                        ref = node.p_xref().p_basic_decl#.p_canonical_part
                         if ref is None:
                             self.__provider.log("%s has no referenced_decl..." % node, mode="error")
                             continue
 
-                        ref = ref.p_canonical_part
                         loc_node = ref
                     except Exception as ex:
-                        self.__provider.log(node, mode="error")
-                        self.__provider.log(ex.args[0], mode="error")
+                        self.__provider.log("%s: %s" % (print_frame(), node), mode="error")
+                        self.__provider.log("%s: %s" % (print_frame(), ex.args[0]), mode="error")
+                        print node.p_xref()
+                        print dir(node.p_xref())
                         continue
 
                 if ref is not None:

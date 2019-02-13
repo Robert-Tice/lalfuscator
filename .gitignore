@@ -1,0 +1,4 @@
+test_proj/
+*.log
+*.pyc
+.DS_Store
