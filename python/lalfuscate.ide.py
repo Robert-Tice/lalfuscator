@@ -28,6 +28,21 @@ def initialize_project_plugin():
                 ro_proj = GPS.Project.root()
                 return [src.path for src in ro_proj.sources()]
 
+            def get_dest_location(self):
+                dest = self.get_obj_locations()[0]
+
+                if not os.path.isdir(dest):
+                    self.log("Destination path %s is invalid. Defaulting to current directory %s..." % (dest, os.getcwd()), mode="error")
+                    dest = os.getcwd()
+
+                return dest
+
+            def get_src_locations(self):
+                return GPS.Project.root().sources()
+
+            def get_obj_locations(self):
+                return GPS.Project.root().object_dirs()
+
             def get_proj_location(self):
                 return GPS.Project.root().file().name()
 

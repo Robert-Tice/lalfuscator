@@ -15,6 +15,18 @@ class BaseProvider:
         pass
 
     @abstractmethod
+    def get_dest_location(self):
+        pass
+
+    @abstractmethod
+    def get_src_locations(self):
+        pass
+
+    @abstractmethod
+    def get_obj_locations(self):
+        pass
+
+    @abstractmethod
     def get_proj_location(self):
         pass
 
@@ -43,25 +55,21 @@ class Obfuscator:
     def __init__(self, provider):
         self.__provider = provider
 
-    def __create_obfuscated_project(self, dest, name):
-        counter = 0
+    def __create_obfuscated_project(self, name):
+        dest = self.__provider.get_dest_location()
 
+        dest = os.path.join(dest, "lalfuscate")
         if not os.path.isdir(dest):
-            self.__provider.log("Destination path %s is invalid. Defaulting to current directory %s..." % (dest, os.getcwd()), mode="error")
-            dest = os.getcwd()
-
-        if name is None:
-            name = "obdir_"
+            os.mkdir(dest)
 
         # create obfuscated project from loaded project
-        while True:
-            wr_dirname = os.path.join(dest, "obdir_%s" % counter)
-            if not os.path.isdir(wr_dirname):
-                os.mkdir(wr_dirname)
-                os.mkdir(os.path.join(wr_dirname, "src"))
-                break
-            else:
-                counter += 1
+        wr_dirname = os.path.join(dest, name)
+
+        if os.path.isdir(wr_dirname):
+            shutil.rmtree(wr_dirname)
+
+        os.mkdir(wr_dirname)
+        os.mkdir(os.path.join(wr_dirname, "src"))
 
         ro_sources = self.__provider.get_source_list()
 
@@ -71,9 +79,13 @@ class Obfuscator:
 
         dests = []
         for src in ro_sources:
-            dest = os.path.join(wr_dirname, "src", os.path.basename(src))
-            shutil.copyfile(src, dest)
-            dests.append(dest)
+            file_dest = os.path.join(wr_dirname, "src", os.path.basename(src))
+            shutil.copyfile(src, file_dest)
+            dests.append(file_dest)
+
+        os.mkdir(os.path.join(wr_dirname, "obj"))
+
+        # TODO: edit new project file to use the new flattened src and obj directory structure
 
         self.__unit_provider = lal.UnitProvider.for_project(self.__wr_proj, scenario_vars=self.__provider.get_scenario_vars(), target=self.__provider.get_target(), runtime=self.__provider.get_runtime())
         self.__ctx = lal.AnalysisContext(unit_provider=self.__unit_provider)
@@ -86,7 +98,6 @@ class Obfuscator:
 
         for key, value in catalog.iteritems():
             for node in value["nodes"]:
-            #    self.__provider.log("%s:%s %s -> %s" % (os.path.basename(node.unit.filename), node.sloc_range, node.text, value["token"]))
                 if node.unit.filename in by_filename.keys():
                     if node.sloc_range.start.line in by_filename[node.unit.filename].keys():
                         by_filename[node.unit.filename][node.sloc_range.start.line].append({"node": node, "token": value["token"]})
@@ -111,7 +122,6 @@ class Obfuscator:
 
             if key in self.__file_map.keys():
                 dest = os.path.join(os.path.dirname(os.path.abspath(key)), self.__file_map[key] + os.path.splitext(key)[1])
-                #self.__provider.log("Move %s to %s" % (key, dest))
                 if key != dest:
                     if os.path.isfile(dest):
                         self.__provider.log("Error: file %s already exists..." % dest, mode="error")
@@ -128,16 +138,14 @@ class Obfuscator:
         with open(os.path.join(os.path.dirname(self.__wr_proj), "token_map.txt"), "w") as f:
             f.writelines(lines)
 
-    def do_obfuscate(self, dest, name, dump):
-        if dest is None:
-            dest = os.getcwd()
-        self.__create_obfuscated_project(dest, name)
-        node_catalog = self.__populate_catalog(dump)
+    def do_obfuscate(self, name, dump, purge_comments):
+        self.__create_obfuscated_project(name)
+        node_catalog = self.__populate_catalog(dump, purge_comments)
         self.__generate_token_map(node_catalog)
         self.__edit_files(node_catalog)
         self.__provider.log("Obfuscated project located: %s" % self.__wr_proj)
 
-    def __populate_catalog(self, dump):
+    def __populate_catalog(self, dump, purge_comments):
         catalog = {}
 
         token_catalog = {"package": Token("pk"),
@@ -146,7 +154,7 @@ class Obfuscator:
                          "object": Token("ob"),
                          "type": Token("t"),
                          "parameter": Token("fp"),
-                         "literal": Token("l")
+                         "literal": Token("l"),
                         }
 
         def add_node(key, node, token_type):
@@ -167,6 +175,7 @@ class Obfuscator:
             return from_runtime(node)
 
         def from_runtime(node):
+            print ""
             text = node.text.lower()
             for prefix in rt_prefix:
                 if text.startswith(prefix + "."):
@@ -174,6 +183,7 @@ class Obfuscator:
             return False
 
         def is_standard_type(node):
+        #    print "Node: %s - file: %s" % (node, node.unit.filename)
             return node.unit.filename.endswith('__standard')
 
         def dump_nodes(root, filename):
@@ -187,7 +197,6 @@ class Obfuscator:
             info = inspect.getframeinfo(frame)
 
             return "%s:%s:%s" % (info.filename, info.function, info.lineno)
-
 
         for u in self.__units:
             if u.root is None:
@@ -207,8 +216,7 @@ class Obfuscator:
 
                 if node.p_is_defining:
                     try:
-                        ref = node.p_enclosing_defining_name.p_basic_decl#.p_canonical_part
-                        #print "Defining ref canonical: %s for %s" % (ref, node)
+                        ref = node.p_enclosing_defining_name.p_basic_decl
                         loc_node = node
                     except Exception as ex:
                         self.__provider.log("%s: %s" % (print_frame(), node))
@@ -216,8 +224,7 @@ class Obfuscator:
                         continue
                 else:
                     try:
-                    #    ref = node.p_referenced_decl()
-                        ref = node.p_xref().p_basic_decl#.p_canonical_part
+                        ref = node.p_xref().p_basic_decl
                         if ref is None:
                             self.__provider.log("%s has no referenced_decl..." % node, mode="error")
                             continue
@@ -261,14 +268,43 @@ class Obfuscator:
             for node in u.root.findall(lal.LibraryItem):
                 if node.f_item.is_a(lal.SubpBody):
                     self.__file_map[node.unit.filename] = "main"
-                elif node.f_item.is_a(lal.BasePackageDecl, lal.GenericPackageDecl, lal.GenericPackageInstantiation, lal.PackageBody):
+                elif node.f_item.is_a(lal.BasePackageDecl, lal.GenericPackageDecl):
+                    loc = file_location(node.f_item.f_package_decl)
+                    if loc not in catalog.keys():
+                        self.__provider.log("Package defintion not found in catalog - %s" % loc)
+                        continue
+                    token = catalog[loc]["token"]
+                    self.__file_map[node.unit.filename] = token
+                elif node.f_item.is_a(lal.GenericPackageInstantiation, lal.PackageBody):
                     loc = file_location(node.f_item.p_canonical_part)
                     if loc not in catalog.keys():
-                        self.__provider.log("Package defintion not found in catalog - %s:%s" % (loc, catalog.keys()))
+                        self.__provider.log("Package defintion not found in catalog - %s" % loc)
                         continue
                     token = catalog[loc]["token"]
                     self.__file_map[node.unit.filename] = token
                 else:
                     self.__provider.log("This LibraryItem is not recognized - %s:%s" % (node.unit.filename, node.f_item))
+
+            if purge_comments:
+                purge_map = []
+                self.__provider.log("Purging comments from file %s..." % u.root.unit.filename)
+                for token in u.iter_tokens():
+                    if token.kind == "Comment":
+                        purge_map.append(token)
+
+                with open(u.root.unit.filename, 'r') as f:
+                    lines = f.readlines()
+
+                for token in purge_map:
+                    line = token.sloc_range.start.line
+                    num_characters = token.sloc_range.end.column - token.sloc_range.start.column
+                    characters = "".join('-' * num_characters)
+
+                    lines[line - 1] = lines[line - 1][:token.sloc_range.start.column - 1] + characters + lines[line - 1][token.sloc_range.end.column - 1:]
+
+
+                with open(u.root.unit.filename, 'w') as f:
+                    f.writelines(lines)
+            self.__provider.log("------------")
 
         return catalog
